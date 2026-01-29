@@ -29,14 +29,18 @@ MainWindow::MainWindow(QWidget *parent)
     startLabel = new QLabel("Start (x, y):", this);
     startXSpin = new QSpinBox(this);
     startXSpin->setRange(0, 9999);
+    startXSpin->setValue(5);
     startYSpin = new QSpinBox(this);
     startYSpin->setRange(0, 9999);
+    startYSpin->setValue(5);
 
     goalLabel = new QLabel("Goal (x, y):", this);
     goalXSpin = new QSpinBox(this);
     goalXSpin->setRange(0, 9999);
+    goalXSpin->setValue(8);
     goalYSpin = new QSpinBox(this);
     goalYSpin->setRange(0, 9999);
+    goalYSpin->setValue(8);
 
     inputLayout->addWidget(startLabel, 0, 0);
     inputLayout->addWidget(startXSpin, 0, 1);
@@ -104,8 +108,8 @@ void MainWindow::onLoadMap()
             // We want ARGB32 for drawing the path on top later easily.
             currentMap = currentMap.convertToFormat(QImage::Format_ARGB32);
             
-            mapLabel->setPixmap(QPixmap::fromImage(currentMap));
-            mapLabel->adjustSize();
+            displayedImage = currentMap;
+            updateMapDisplay();
             
             // Update spinbox ranges based on map size
             int maxX = currentMap.width() - 1;
@@ -159,7 +163,26 @@ void MainWindow::onSearchPath()
     }
     painter.end();
 
-    mapLabel->setPixmap(QPixmap::fromImage(resultImage));
+    displayedImage = resultImage;
+    updateMapDisplay();
+}
+
+void MainWindow::updateMapDisplay()
+{
+    if (displayedImage.isNull()) return;
+
+    // Scale to viewport, keeping aspect ratio
+    QSize viewportSize = scrollArea->viewport()->size();
+    if (viewportSize.isEmpty()) return;
+
+    QPixmap px = QPixmap::fromImage(displayedImage);
+    mapLabel->setPixmap(px.scaled(viewportSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+}
+
+void MainWindow::resizeEvent(QResizeEvent* event)
+{
+    QMainWindow::resizeEvent(event);
+    updateMapDisplay();
 }
 
 bool MainWindow::isValid(int x, int y, const QImage& map) {
@@ -185,8 +208,14 @@ std::vector<QPoint> MainWindow::findPath(QImage map, QPoint start, QPoint goal)
     int height = map.height();
 
     // 8 Directions
-    int dx[] = {1, 1, 0, -1, -1, -1, 0, 1, 0};
-    int dy[] = {0, 1, 1, 1, 0, -1, -1, -1, 0};
+    //int dx[] = {1, 1, 0, -1, -1, -1, 0, 1, 0};
+    //int dy[] = {0, 1, 1, 1, 0, -1, -1, -1, 0};
+
+
+    // 9 choices of two motors
+    int d_l[] = {0, 1, -1, 0, 1,  0, -1,  0,  1};
+    int d_r[] = {0, 1, -1, 1, 0, -1,  0, -1, -1};
+    float rpm_cost[] = {0, 0.1, 0.1, 0.2, 0.2, 0.2, 0.2, 0.2, 0.3};
 
     std::priority_queue<Node*, std::vector<Node*>, NodeCompare> openSet;
     std::vector<std::vector<bool>> closedSet(width, std::vector<bool>(height, false));
@@ -197,10 +226,12 @@ std::vector<QPoint> MainWindow::findPath(QImage map, QPoint start, QPoint goal)
     openSet.push(startNode);
 
     Node* goalNode = nullptr;
+    qDebug() << "---------start---------";
 
     while (!openSet.empty()) {
         Node* current = openSet.top();
         openSet.pop();
+
 
         if (current->x == goal.x() && current->y == goal.y()) {
             goalNode = current;
@@ -209,27 +240,86 @@ std::vector<QPoint> MainWindow::findPath(QImage map, QPoint start, QPoint goal)
 
         if (closedSet[current->x][current->y]) continue;
         closedSet[current->x][current->y] = true;
+        for (int i = 0; i < 9; ++i) {
+            float enlarge_factor = 10; //set basic grid to decimeter
+            float dt = 0.05; //initial time step (second)
+            float L = 0.3*enlarge_factor; //distance between two wheels (meter)
+            float d_wheel = 0.25*enlarge_factor; //wheel diameter (meter)
+            float max_rpm = 5; //maximum rpm
+            
+            float next_l_rpm, next_r_rpm;
+            float move_distance = 0;
+            float turn_angle = 0;
 
-        for (int i = 0; i < 8; ++i) {
-            int nx = current->x + dx[i];
-            int ny = current->y + dy[i];
+            next_l_rpm = current->l_rpm + d_l[i];
+            next_r_rpm = current->r_rpm + d_r[i];
 
+            if(next_l_rpm>max_rpm) {next_l_rpm = max_rpm;}
+            if(next_r_rpm>max_rpm) {next_r_rpm = max_rpm;}
+            if(next_l_rpm<-max_rpm) {next_l_rpm = -max_rpm;}
+            if(next_r_rpm<-max_rpm) {next_r_rpm = -max_rpm;}
+
+            float next_l_v = (next_l_rpm) * 2 * M_PI * d_wheel / 60;
+            float next_r_v = (next_r_rpm) * 2 * M_PI * d_wheel / 60;
+            float next_v = (next_r_v + next_l_v) / 2;
+            float next_omega = (next_r_v - next_l_v) / L;
+            if (next_omega != 0 && (next_v/next_omega < 1)) continue;
+            if (next_v ==0) continue;
+
+
+            float next_theta = current->theta + next_omega * dt;
+            float next_x = current->real_x + next_v * cos(next_theta) * dt;
+            float next_y = current->real_y + next_v * sin(next_theta) * dt;
+            move_distance = move_distance + abs(next_v) * dt;
+            turn_angle = turn_angle + abs(next_omega) * dt;
+            int nx, ny;
+
+            while(move_distance<1 && turn_angle<M_PI/8){
+                next_theta = next_theta + next_omega * dt;
+                next_x = next_x + next_v * cos(next_theta) * dt;
+                next_y = next_y + next_v * sin(next_theta) * dt;
+                move_distance = move_distance + abs(next_v) * dt;
+                turn_angle = turn_angle + abs(next_omega) * dt;
+            }
+            //wrap theta to -pi to pi
+            next_theta = atan2(sin(next_theta), cos(next_theta));
+            nx = round(next_x);
+            ny = round(next_y);
+            
             if (isValid(nx, ny, map) && !closedSet[nx][ny]) {
-                float newG = current->g + std::sqrt(dx[i]*dx[i] + dy[i]*dy[i]);
-                
-                Node* neighbor = allNodes[nx][ny];
+                float d_theta = atan2(goal.y()-next_y, goal.x()-next_x) - next_theta;
+                d_theta = atan2(sin(d_theta), cos(d_theta)) ;
+                float newG = current->g + move_distance + abs(next_omega);               //qDebug() << next_x-current->real_x << " " << next_y-current->real_y << " hypot: " << std::hypot(next_x - current->real_x, next_y - current->real_y); 
+                Node* neighbor = allNodes[nx][ny]; 
                 if (neighbor == nullptr) {
                     neighbor = new Node(nx, ny);
                     allNodes[nx][ny] = neighbor;
                     neighbor->g = newG;
-                    neighbor->h = std::hypot(nx - goal.x(), ny - goal.y());
+                    neighbor->h = std::hypot(next_x - goal.x(), next_y - goal.y()) + abs(d_theta)*5;
+                    neighbor->real_x = next_x;
+                    neighbor->real_y = next_y;
+                    neighbor->theta = next_theta;
+                    neighbor->l_rpm = next_l_rpm;
+                    neighbor->r_rpm = next_r_rpm;
                     neighbor->parent = current;
                     openSet.push(neighbor);
+                    qDebug() << "1neighbor: (" << neighbor->x << ", " << neighbor->y << ")" << "(" << neighbor->real_x << ", " << neighbor->real_y << "," << neighbor->theta << ")" << "RPM: (" << neighbor->l_rpm << ", " << neighbor->r_rpm << ")" <<"From: (" << current->x << ", " << current->y << current->theta <<")"; 
+                    qDebug() << neighbor->g << " " << neighbor->h << " " << neighbor->f() << "d_theta: " << d_theta;
                 } else if (newG < neighbor->g) {
                     neighbor->g = newG;
+                    neighbor->h = std::hypot(next_x - goal.x(), next_y - goal.y()) + abs(d_theta)*5;
+                    neighbor->real_x = next_x;
+                    neighbor->real_y = next_y;
+                    neighbor->theta = next_theta;
+                    neighbor->l_rpm = next_l_rpm;
+                    neighbor->r_rpm = next_r_rpm;
                     neighbor->parent = current;
                     openSet.push(neighbor);
+                    qDebug() << "2neighbor: (" << neighbor->x << ", " << neighbor->y << ")" << "(" << neighbor->real_x << ", " << neighbor->real_y << "," << neighbor->theta << ")" << "RPM: (" << neighbor->l_rpm << ", " << neighbor->r_rpm << ")" <<"From: (" << current->x << ", " << current->y << current->theta <<")"; 
+                    qDebug() << neighbor->g << " " << neighbor->h << " " << neighbor->f() << "d_theta: " << d_theta;
+
                 }
+
             }
         }
     }

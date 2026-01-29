@@ -13,11 +13,12 @@
 
 struct Node {
     int x, y;
-    float g, h;
+    float real_x, real_y;
+    float theta, g, h;
     int l_rpm, r_rpm;
     Node* parent;
 
-    Node(int _x, int _y) : x(_x), y(_y), g(0), h(0), l_rpm(0), r_rpm(0), parent(nullptr) {}
+    Node(int _x, int _y) : x(_x), y(_y), real_x(_x), real_y(_y), theta(0), g(0), h(0), l_rpm(0), r_rpm(0), parent(nullptr) {}
     float f() const { return g + h; }
 };
 
@@ -38,7 +39,14 @@ private:
     // Helper for A*
     std::vector<QPoint> findPath(QImage map, QPoint start, QPoint goal);
     bool isValid(int x, int y, const QImage& map);
+    
+    // Map Display Helper
+    void updateMapDisplay();
 
+protected:
+    void resizeEvent(QResizeEvent* event) override;
+
+private:
     QWidget *centralWidget;
     QVBoxLayout *mainLayout;
     
@@ -67,6 +75,7 @@ private:
     QScrollArea *scrollArea;
     QLabel *mapLabel;
     QImage currentMap;
+    QImage displayedImage; // Image currently shown (raw or with path)
 };
 
 #endif // MAINWINDOW_H
