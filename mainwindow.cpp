@@ -8,6 +8,7 @@
 #include <queue>
 #include <cmath>
 #include <set>
+#include <chrono>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -37,10 +38,10 @@ MainWindow::MainWindow(QWidget *parent)
     goalLabel = new QLabel("Goal (x, y):", this);
     goalXSpin = new QSpinBox(this);
     goalXSpin->setRange(0, 9999);
-    goalXSpin->setValue(8);
+    goalXSpin->setValue(128);
     goalYSpin = new QSpinBox(this);
     goalYSpin->setRange(0, 9999);
-    goalYSpin->setValue(8);
+    goalYSpin->setValue(168);
 
     inputLayout->addWidget(startLabel, 0, 0);
     inputLayout->addWidget(startXSpin, 0, 1);
@@ -48,6 +49,9 @@ MainWindow::MainWindow(QWidget *parent)
     inputLayout->addWidget(goalLabel, 1, 0);
     inputLayout->addWidget(goalXSpin, 1, 1);
     inputLayout->addWidget(goalYSpin, 1, 2);
+
+    timeLabel = new QLabel("Time: N/A", this);
+    inputLayout->addWidget(timeLabel, 2, 0, 1, 3); // Spanning 3 columns
 
     topLayout->addWidget(inputGroup);
     topLayout->addStretch(); // Spacer between inputs and buttons
@@ -146,7 +150,12 @@ void MainWindow::onSearchPath()
     }
 
     // Run A*
+    auto start_time = std::chrono::high_resolution_clock::now();
     std::vector<QPoint> path = findPath(currentMap, start, goal);
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+    
+    timeLabel->setText(QString("Time: %1 s").arg(duration.count()/1000.0));
 
     if (path.empty()) {
         QMessageBox::information(this, "Result", "No path found!");
@@ -156,7 +165,7 @@ void MainWindow::onSearchPath()
     // Draw path
     QImage resultImage = currentMap.copy();
     QPainter painter(&resultImage);
-    painter.setPen(QPen(Qt::red, 2));
+    painter.setPen(QPen(Qt::red, 1));
 
     for (size_t i = 0; i < path.size() - 1; ++i) {
         painter.drawLine(path[i], path[i+1]);
@@ -217,12 +226,28 @@ std::vector<QPoint> MainWindow::findPath(QImage map, QPoint start, QPoint goal)
     int d_r[] = {0, 1, -1, 1, 0, -1,  0, -1, -1};
     float rpm_cost[] = {0, 0.1, 0.1, 0.2, 0.2, 0.2, 0.2, 0.2, 0.3};
 
+    int layers = 360;
     std::priority_queue<Node*, std::vector<Node*>, NodeCompare> openSet;
-    std::vector<std::vector<bool>> closedSet(width, std::vector<bool>(height, false));
-    std::vector<std::vector<Node*>> allNodes(width, std::vector<Node*>(height, nullptr));
+    std::vector<bool> closedSet(width * height * layers, false);
 
-    Node* startNode = new Node(start.x(), start.y());
-    allNodes[start.x()][start.y()] = startNode;
+    /*std::vector<std::vector<std::vector<bool>>> closedSet(
+        width,
+        std::vector<std::vector<bool>>(
+            height,
+            std::vector<bool>(layers, false)
+        )
+    );
+    */
+    std::vector<std::vector<std::vector<Node*>>> allNodes(
+        width,
+        std::vector<std::vector<Node*>>(
+            height,
+            std::vector<Node*>(layers, nullptr)
+        )
+    );
+
+    Node* startNode = new Node(start.x(), start.y(), 0);
+    allNodes[start.x()][start.y()][0] = startNode;
     openSet.push(startNode);
 
     Node* goalNode = nullptr;
@@ -238,8 +263,8 @@ std::vector<QPoint> MainWindow::findPath(QImage map, QPoint start, QPoint goal)
             break;
         }
 
-        if (closedSet[current->x][current->y]) continue;
-        closedSet[current->x][current->y] = true;
+        if (closedSet[current->x + current->y * width + current->theta * width * height]) continue;
+        closedSet[current->x + current->y * width + current->theta * width * height] = true;
         for (int i = 0; i < 9; ++i) {
             float enlarge_factor = 10; //set basic grid to decimeter
             
@@ -279,21 +304,23 @@ std::vector<QPoint> MainWindow::findPath(QImage map, QPoint start, QPoint goal)
                 move_distance = move_distance + abs(next_v) * dt;
                 turn_angle = turn_angle + abs(next_omega) * dt;
             }
-            //wrap theta to -pi to pi
+            //wrap theta to degree(0-359)
             next_theta = atan2(sin(next_theta), cos(next_theta));
+            next_theta = next_theta * 180 / M_PI;
+            if (next_theta < 0) next_theta = next_theta + 360;
             nx = round(next_x);
             ny = round(next_y);
             
-            if (isValid(nx, ny, map) && !closedSet[nx][ny]) {
+            if (isValid(nx, ny, map) && !closedSet[nx + ny * width + next_theta * width * height]) {
                 float d_theta = atan2(goal.y()-next_y, goal.x()-next_x) - next_theta;
                 d_theta = atan2(sin(d_theta), cos(d_theta)) ;
-                float newG = current->g + move_distance + abs(d_theta)*0.5 + abs(0.2/next_v);               //qDebug() << next_x-current->real_x << " " << next_y-current->real_y << " hypot: " << std::hypot(next_x - current->real_x, next_y - current->real_y); 
-                Node* neighbor = allNodes[nx][ny]; 
+                float newG = current->g + move_distance + abs(0.1/next_v);               //qDebug() << next_x-current->real_x << " " << next_y-current->real_y << " hypot: " << std::hypot(next_x - current->real_x, next_y - current->real_y); 
+                Node* neighbor = allNodes[nx][ny][next_theta]; 
                 if (neighbor == nullptr) {
-                    neighbor = new Node(nx, ny);
-                    allNodes[nx][ny] = neighbor;
+                    neighbor = new Node(nx, ny, next_theta);
+                    allNodes[nx][ny][next_theta] = neighbor;
                     neighbor->g = newG;
-                    neighbor->h = std::hypot(next_x - goal.x(), next_y - goal.y()) + abs(d_theta)*0.01;
+                    neighbor->h = std::hypot(next_x - goal.x(), next_y - goal.y()) + abs(d_theta)*0;
                     neighbor->real_x = next_x;
                     neighbor->real_y = next_y;
                     neighbor->theta = next_theta;
@@ -301,11 +328,11 @@ std::vector<QPoint> MainWindow::findPath(QImage map, QPoint start, QPoint goal)
                     neighbor->r_rpm = next_r_rpm;
                     neighbor->parent = current;
                     openSet.push(neighbor);
-                    qDebug() << "1neighbor: (" << neighbor->x << ", " << neighbor->y << ")" << "(" << neighbor->real_x << ", " << neighbor->real_y << "," << neighbor->theta << ")" << "RPM: (" << neighbor->l_rpm << ", " << neighbor->r_rpm << ")" <<"From: (" << current->x << ", " << current->y << current->theta <<")"; 
-                    qDebug() << "move_distance: " << move_distance << ", g: " << neighbor->g << ", h: " << neighbor->h << " " << neighbor->f() << "d_theta: " << d_theta;
+                    //qDebug() << "1neighbor: (" << neighbor->x << ", " << neighbor->y << ", " << neighbor->theta << ")" << "(" << neighbor->real_x << ", " << neighbor->real_y << "," << neighbor->theta << ")" << "RPM: (" << neighbor->l_rpm << ", " << neighbor->r_rpm << ")" <<"From: (" << current->x << ", " << current->y << current->theta <<")"; 
+                    //qDebug() << "move_distance: " << move_distance << ", g: " << neighbor->g << ", h: " << neighbor->h << " " << neighbor->f() << "d_theta: " << d_theta;
                 } else if (newG < neighbor->g) {
                     neighbor->g = newG;
-                    neighbor->h = std::hypot(next_x - goal.x(), next_y - goal.y()) + abs(d_theta)*0.01;
+                    neighbor->h = std::hypot(next_x - goal.x(), next_y - goal.y()) + abs(d_theta)*0;
                     neighbor->real_x = next_x;
                     neighbor->real_y = next_y;
                     neighbor->theta = next_theta;
@@ -313,8 +340,8 @@ std::vector<QPoint> MainWindow::findPath(QImage map, QPoint start, QPoint goal)
                     neighbor->r_rpm = next_r_rpm;
                     neighbor->parent = current;
                     openSet.push(neighbor);
-                    qDebug() << "2neighbor: (" << neighbor->x << ", " << neighbor->y << ")" << "(" << neighbor->real_x << ", " << neighbor->real_y << "," << neighbor->theta << ")" << "RPM: (" << neighbor->l_rpm << ", " << neighbor->r_rpm << ")" <<"From: (" << current->x << ", " << current->y << current->theta <<")"; 
-                    qDebug() << "move_distance: " << move_distance << ", g: " << neighbor->g << ", h: " << neighbor->h << " " << neighbor->f() << "d_theta: " << d_theta;
+                    //qDebug() << "2neighbor: (" << neighbor->x << ", " << neighbor->y << ", " << neighbor->theta << ")" << "(" << neighbor->real_x << ", " << neighbor->real_y << "," << neighbor->theta << ")" << "RPM: (" << neighbor->l_rpm << ", " << neighbor->r_rpm << ")" <<"From: (" << current->x << ", " << current->y << current->theta <<")"; 
+                    //qDebug() << "move_distance: " << move_distance << ", g: " << neighbor->g << ", h: " << neighbor->h << " " << neighbor->f() << "d_theta: " << d_theta;
 
                 }
 
@@ -326,7 +353,7 @@ std::vector<QPoint> MainWindow::findPath(QImage map, QPoint start, QPoint goal)
     if (goalNode) {
         Node* curr = goalNode;
         while (curr) {
-            path.push_back(QPoint(curr->x, curr->y));
+            path.push_back(QPoint(curr->real_x, curr->real_y));
             curr = curr->parent;
         }
         // Memory cleanup could be done here (delete all nodes in allNodes)
@@ -336,7 +363,9 @@ std::vector<QPoint> MainWindow::findPath(QImage map, QPoint start, QPoint goal)
     // Cleanup
     for(int i=0; i<width; ++i) {
         for(int j=0; j<height; ++j) {
-            if(allNodes[i][j]) delete allNodes[i][j];
+            for(int k=0; k<layers; ++k) {   
+                if(allNodes[i][j][k]) delete allNodes[i][j][k];
+            }
         }
     }
 

@@ -12,13 +12,13 @@
 #include <vector>
 
 struct Node {
-    int x, y;
+    int x, y, theta; // theta in degree(0-359)
     float real_x, real_y;
-    float theta, g, h;
+    float g, h;
     int l_rpm, r_rpm;
     Node* parent;
 
-    Node(int _x, int _y) : x(_x), y(_y), real_x(_x), real_y(_y), theta(0), g(0), h(0), l_rpm(0), r_rpm(0), parent(nullptr) {}
+    Node(int _x, int _y, int _theta) : x(_x), y(_y), real_x(_x), real_y(_y), theta(_theta), g(0), h(0), l_rpm(0), r_rpm(0), parent(nullptr) {}
     float f() const { return g + h; }
 };
 
@@ -76,6 +76,9 @@ private:
     QLabel *mapLabel;
     QImage currentMap;
     QImage displayedImage; // Image currently shown (raw or with path)
+
+    // Execution Time Display
+    QLabel *timeLabel;
 };
 
 #endif // MAINWINDOW_H
