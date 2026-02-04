@@ -79,7 +79,7 @@ MainWindow::MainWindow(QWidget *parent)
     mapLabel = new QLabel(this);
     mapLabel->setAlignment(Qt::AlignCenter);
     scrollArea->setWidget(mapLabel);
-    scrollArea->setWidgetResizable(true); 
+    scrollArea->setWidgetResizable(false); // Disable auto-resize to allow scrollbars
     
     mainLayout->addWidget(scrollArea);
 
@@ -180,12 +180,14 @@ void MainWindow::updateMapDisplay()
 {
     if (displayedImage.isNull()) return;
 
-    // Scale to viewport, keeping aspect ratio
-    QSize viewportSize = scrollArea->viewport()->size();
-    if (viewportSize.isEmpty()) return;
+    // Fixed resolution 1000x1000
+    QSize fixedSize(1000, 1000);
 
     QPixmap px = QPixmap::fromImage(displayedImage);
-    mapLabel->setPixmap(px.scaled(viewportSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    QPixmap scaledPx = px.scaled(fixedSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    
+    mapLabel->setPixmap(scaledPx);
+    mapLabel->resize(scaledPx.size()); // Ensure label fits the pixmap
 }
 
 void MainWindow::resizeEvent(QResizeEvent* event)
@@ -228,7 +230,8 @@ std::vector<QPoint> MainWindow::findPath(QImage map, QPoint start, QPoint goal)
 
     int layers = 360;
     std::priority_queue<Node*, std::vector<Node*>, NodeCompare> openSet;
-    std::vector<bool> closedSet(width * height * layers, false);
+    //std::vector<bool> closedSet(width * height * layers, false);
+    std::vector<uint8_t> closedSet(width * height * layers, 0);
 
     /*std::vector<std::vector<std::vector<bool>>> closedSet(
         width,
@@ -263,8 +266,8 @@ std::vector<QPoint> MainWindow::findPath(QImage map, QPoint start, QPoint goal)
             break;
         }
 
-        if (closedSet[current->x + current->y * width + current->theta * width * height]) continue;
-        closedSet[current->x + current->y * width + current->theta * width * height] = true;
+        if (closedSet[current->x + current->y * width + current->theta * width * height]==1) continue;
+        closedSet[current->x + current->y * width + current->theta * width * height] = 1;
         for (int i = 0; i < 9; ++i) {
             float enlarge_factor = 10; //set basic grid to decimeter
             
@@ -308,41 +311,49 @@ std::vector<QPoint> MainWindow::findPath(QImage map, QPoint start, QPoint goal)
             next_theta = atan2(sin(next_theta), cos(next_theta));
             next_theta = next_theta * 180 / M_PI;
             if (next_theta < 0) next_theta = next_theta + 360;
+            
+            int i_theta = static_cast<int>(next_theta);
+            if (i_theta >= 360) i_theta = 0; // Robustness against 360.0
+
             nx = round(next_x);
             ny = round(next_y);
             
-            if (isValid(nx, ny, map) && !closedSet[nx + ny * width + next_theta * width * height]) {
-                float d_theta = atan2(goal.y()-next_y, goal.x()-next_x) - next_theta;
-                d_theta = atan2(sin(d_theta), cos(d_theta)) ;
-                float newG = current->g + move_distance + abs(0.1/next_v);               //qDebug() << next_x-current->real_x << " " << next_y-current->real_y << " hypot: " << std::hypot(next_x - current->real_x, next_y - current->real_y); 
-                Node* neighbor = allNodes[nx][ny][next_theta]; 
-                if (neighbor == nullptr) {
-                    neighbor = new Node(nx, ny, next_theta);
-                    allNodes[nx][ny][next_theta] = neighbor;
-                    neighbor->g = newG;
-                    neighbor->h = std::hypot(next_x - goal.x(), next_y - goal.y()) + abs(d_theta)*0;
-                    neighbor->real_x = next_x;
-                    neighbor->real_y = next_y;
-                    neighbor->theta = next_theta;
-                    neighbor->l_rpm = next_l_rpm;
-                    neighbor->r_rpm = next_r_rpm;
-                    neighbor->parent = current;
-                    openSet.push(neighbor);
-                    //qDebug() << "1neighbor: (" << neighbor->x << ", " << neighbor->y << ", " << neighbor->theta << ")" << "(" << neighbor->real_x << ", " << neighbor->real_y << "," << neighbor->theta << ")" << "RPM: (" << neighbor->l_rpm << ", " << neighbor->r_rpm << ")" <<"From: (" << current->x << ", " << current->y << current->theta <<")"; 
-                    //qDebug() << "move_distance: " << move_distance << ", g: " << neighbor->g << ", h: " << neighbor->h << " " << neighbor->f() << "d_theta: " << d_theta;
-                } else if (newG < neighbor->g) {
-                    neighbor->g = newG;
-                    neighbor->h = std::hypot(next_x - goal.x(), next_y - goal.y()) + abs(d_theta)*0;
-                    neighbor->real_x = next_x;
-                    neighbor->real_y = next_y;
-                    neighbor->theta = next_theta;
-                    neighbor->l_rpm = next_l_rpm;
-                    neighbor->r_rpm = next_r_rpm;
-                    neighbor->parent = current;
-                    openSet.push(neighbor);
-                    //qDebug() << "2neighbor: (" << neighbor->x << ", " << neighbor->y << ", " << neighbor->theta << ")" << "(" << neighbor->real_x << ", " << neighbor->real_y << "," << neighbor->theta << ")" << "RPM: (" << neighbor->l_rpm << ", " << neighbor->r_rpm << ")" <<"From: (" << current->x << ", " << current->y << current->theta <<")"; 
-                    //qDebug() << "move_distance: " << move_distance << ", g: " << neighbor->g << ", h: " << neighbor->h << " " << neighbor->f() << "d_theta: " << d_theta;
+            if (isValid(nx, ny, map)) {
+                 int idx = nx + ny * width + i_theta * width * height;
 
+                 if (closedSet[idx] == 0) {
+                    float d_theta = atan2(goal.y()-next_y, goal.x()-next_x) - next_theta;
+                    d_theta = atan2(sin(d_theta), cos(d_theta)) ;
+                    float newG = current->g + move_distance + abs(0.1/next_v);               //qDebug() << next_x-current->real_x << " " << next_y-current->real_y << " hypot: " << std::hypot(next_x - current->real_x, next_y - current->real_y); 
+                    Node* neighbor = allNodes[nx][ny][i_theta]; 
+                    if (neighbor == nullptr) {
+                        neighbor = new Node(nx, ny, i_theta);
+                        allNodes[nx][ny][i_theta] = neighbor;
+                        neighbor->g = newG;
+                        neighbor->h = std::hypot(next_x - goal.x(), next_y - goal.y()) + abs(d_theta)*0;
+                        neighbor->real_x = next_x;
+                        neighbor->real_y = next_y;
+                        neighbor->theta = i_theta;
+                        neighbor->l_rpm = next_l_rpm;
+                        neighbor->r_rpm = next_r_rpm;
+                        neighbor->parent = current;
+                        openSet.push(neighbor);
+                        //qDebug() << "1neighbor: (" << neighbor->x << ", " << neighbor->y << ", " << neighbor->theta << ")" << "(" << neighbor->real_x << ", " << neighbor->real_y << "," << neighbor->theta << ")" << "RPM: (" << neighbor->l_rpm << ", " << neighbor->r_rpm << ")" <<"From: (" << current->x << ", " << current->y << current->theta <<")"; 
+                        //qDebug() << "move_distance: " << move_distance << ", g: " << neighbor->g << ", h: " << neighbor->h << " " << neighbor->f() << "d_theta: " << d_theta;
+                    } else if (newG < neighbor->g) {
+                        neighbor->g = newG;
+                        neighbor->h = std::hypot(next_x - goal.x(), next_y - goal.y()) + abs(d_theta)*0;
+                        neighbor->real_x = next_x;
+                        neighbor->real_y = next_y;
+                        neighbor->theta = i_theta;
+                        neighbor->l_rpm = next_l_rpm;
+                        neighbor->r_rpm = next_r_rpm;
+                        neighbor->parent = current;
+                        openSet.push(neighbor);
+                        //qDebug() << "2neighbor: (" << neighbor->x << ", " << neighbor->y << ", " << neighbor->theta << ")" << "(" << neighbor->real_x << ", " << neighbor->real_y << "," << neighbor->theta << ")" << "RPM: (" << neighbor->l_rpm << ", " << neighbor->r_rpm << ")" <<"From: (" << current->x << ", " << current->y << current->theta <<")"; 
+                        //qDebug() << "move_distance: " << move_distance << ", g: " << neighbor->g << ", h: " << neighbor->h << " " << neighbor->f() << "d_theta: " << d_theta;
+
+                    }
                 }
 
             }
